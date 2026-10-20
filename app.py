@@ -59,7 +59,7 @@ class CredError(RuntimeError):
 # 登录
 # --------------------------------------------------------------------------
 
-def login(username: str, password: str) -> "igem.Session":
+def login(username: str, password: str) -> tuple:
     """用用户自己的 iGEM 账号密码登录，返回一个已登录的 Session。"""
     profile = Path(tempfile.mkdtemp(prefix="igem-web-"))
     session = igem.Session(headless=True, profile_dir=profile, verbose=False,
@@ -92,7 +92,7 @@ def login(username: str, password: str) -> "igem.Session":
         if "accounts.igem.org" in page.url or not session.is_logged_in():
             raise CredError("登录没有成功：账号或密码不对，或者这个账号需要额外验证。")
 
-        return session
+        return session, profile          # profile 交给调用方删
     except BaseException:
         try:
             session.close()
@@ -143,11 +143,10 @@ def convert(body: dict, emit) -> None:
     emit({"type": "log", "text": f"{filename}：{len(parsed.seq)} bp，"
                                 f"{len(pieces)} 段，开始登录 iGEM…"})
 
-    profile = Path(tempfile.mkdtemp(prefix="igem-web-"))
     session = None
+    profile = None
     try:
-        session = login(username, password)
-        session.profile_dir = profile
+        session, profile = login(username, password)     # 登录成功后才拿到 profile
         emit({"type": "log", "text": "登录成功，开始查砖号…"})
 
         finder = engine.BrickFinder(profile_dir=profile, headless=True, verbose=False)
@@ -163,7 +162,8 @@ def convert(body: dict, emit) -> None:
                 session.close()
             except Exception:  # noqa: BLE001
                 pass
-        shutil.rmtree(profile, ignore_errors=True)
+        if profile is not None:             # 真正用过的那个临时配置目录
+            shutil.rmtree(profile, ignore_errors=True)
 
 
 # --------------------------------------------------------------------------

@@ -1,4 +1,6 @@
-# iGEM-parts
+# iGEM 砖号查询（网页版）
+
+https://github.com/LuOH07/parts
 
 把 SnapGene 的 `.dna` 质粒文件转成「一行一段」的 iGEM 砖号清单。
 
