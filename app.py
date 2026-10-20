@@ -68,6 +68,12 @@ def _install_stealth_launch() -> None:
                 "--window-position=40,40",
                 "--disable-blink-features=AutomationControlled",
                 "--lang=en-US",
+                # 云主机上省内存、跑得稳
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-software-rasterizer",
+                "--disable-features=Translate,BackForwardCache",
             ],
             "user_agent": USER_AGENT,
             "locale": "en-US",
@@ -76,7 +82,14 @@ def _install_stealth_launch() -> None:
         }
         if channel:
             kwargs["channel"] = channel
-        return self._pw.chromium.launch_persistent_context(**kwargs)
+        try:
+            return self._pw.chromium.launch_persistent_context(**kwargs)
+        except Exception:
+            if kwargs["headless"]:
+                raise
+            # 没有图形环境（没装 xvfb）时退回无头，别整个挂掉
+            kwargs["headless"] = True
+            return self._pw.chromium.launch_persistent_context(**kwargs)
 
     igem.Session._launch_once = _launch_once       # type: ignore[assignment]
 
@@ -204,6 +217,19 @@ def login(username: str, password: str, log=None) -> tuple:
         page.goto(SIGN_IN, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(900)
 
+        # 记一下登录接口到底回了什么状态码（401/403/429 意思不一样）
+        signin_status: Dict[str, int] = {}
+
+        def _watch(resp):
+            try:
+                if "/auth/sign-in" in resp.url and resp.request.method == "POST":
+                    signin_status["code"] = resp.status
+            except Exception:  # noqa: BLE001
+                pass
+
+        page.on("response", _watch)
+        say(f"登录接口：POST api.igem.org/v1/auth/sign-in")
+
         if "accounts.igem.org" in page.url:
             try:
                 page.fill("#identifier", username, timeout=25000)
@@ -231,13 +257,15 @@ def login(username: str, password: str, log=None) -> tuple:
                 if not alert:
                     alert = _visible_alert(page)
                     if alert:
+                        code = signin_status.get("code")
                         hint = ""
                         low = alert.lower()
                         for key, text in _ALERT_HINTS.items():
                             if key in low:
                                 hint = "\n" + text
                                 break
-                        raise CredError(f"iGEM 登录页提示：{alert}{hint}")
+                        where = f"（登录接口 HTTP {code}）" if code else ""
+                        raise CredError(f"iGEM 登录页提示：{alert}{where}{hint}")
                 if waited == 5.0:
                     say("还在登录页，等一下…")
 

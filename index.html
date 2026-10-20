@@ -158,7 +158,7 @@
     <label class="fld" for="pass">密码</label>
     <input type="password" id="pass" autocomplete="current-password">
 
-    <label class="check"><input type="checkbox" id="remember"> 记住账号和密码（只存在本机浏览器）</label>
+    <label class="check"><input type="checkbox" id="remember"> 记住账号（密码不保存，每次自己输）</label>
 
     <details class="alt" id="altbox">
       <summary>账号密码登不进去？改用已登录状态（login-state.json）</summary>
@@ -209,20 +209,20 @@ let picked = null;        // {name, bytes}
 let lines = [];           // 输出行
 let outputName = "result.txt";
 
-/* ---------- 记住账号 ---------- */
-const KEY = "igem_parts_cred";
+/* ---------- 记住账号（只记账号，绝不存密码） ---------- */
+const KEY = "igem_parts_user";
 try {
+  localStorage.removeItem("igem_parts_cred");     // 旧版本可能存过密码，清掉
   const saved = JSON.parse(localStorage.getItem(KEY) || "null");
   if (saved && saved.user) {
-    userEl.value = saved.user || "";
-    passEl.value = saved.pass || "";
+    userEl.value = saved.user;
     rememberEl.checked = true;
   }
 } catch (e) { /* ignore */ }
 
 function saveCred() {
   if (rememberEl.checked) {
-    localStorage.setItem(KEY, JSON.stringify({ user: userEl.value, pass: passEl.value }));
+    localStorage.setItem(KEY, JSON.stringify({ user: userEl.value }));
   } else {
     localStorage.removeItem(KEY);
   }
