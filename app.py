@@ -103,24 +103,100 @@ def login(username: str, password: str) -> tuple:
 
 
 # --------------------------------------------------------------------------
-# 转换
+# 解析 / 分组 / 转换
 # --------------------------------------------------------------------------
+
+def _decode_dna(data_b64: str):
+    """上传的 base64 → 临时文件 → 解析出 (parsed, pieces)。"""
+    try:
+        raw = base64.b64decode(data_b64 or "", validate=False)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("上传的文件读不出来。") from exc
+    if not raw:
+        raise ValueError("上传的文件是空的。")
+
+    fd, tmp_name = tempfile.mkstemp(suffix=".dna")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as fh:      # 关掉句柄，否则 Windows 删不掉
+            fh.write(raw)
+        return engine.plan(tmp, require_features=True, rev_comp=True, log=None)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _piece_label(p) -> str:
+    """分段列表里显示的名字（不带正向/反向后缀）。"""
+    return p.title.rsplit("（", 1)[0]
+
+
+def plan_segments(body: dict) -> list:
+    """只解析、不登录：返回自动分好的段，给页面做「可合并」的列表。"""
+    parsed, pieces = _decode_dna(body.get("data") or "")
+    out = []
+    for i, p in enumerate(pieces):
+        out.append({
+            "i": i,
+            "label": _piece_label(p),
+            "strand": p.strand,
+            "coords": p.coords,
+            "start": p.ranges[0][0] + 1,      # 显示用 1-based
+            "end": p.ranges[-1][1],
+            "length": len(p.seq),
+            "kind": p.kind,
+        })
+    return out
+
+
+def _rows_from_groups(parsed, pieces, groups):
+    """按页面的分组把片段拼成输出行；groups 为 None 时每段一行。"""
+    if groups is None:
+        return [{"title": p.title, "seq": p.seq} for p in pieces]
+
+    seen = set()
+    rows = []
+    for g in groups:
+        if not isinstance(g, list) or not g:
+            raise ValueError("分组格式不对。")
+        idxs = []
+        for v in g:
+            try:
+                i = int(v)
+            except (TypeError, ValueError):
+                raise ValueError("分组格式不对。")
+            if i < 0 or i >= len(pieces) or i in seen:
+                raise ValueError("分组里有重复或越界的片段。")
+            seen.add(i)
+            idxs.append(i)
+
+        group = [pieces[i] for i in idxs]
+        if len(group) == 1:
+            p = group[0]
+            rows.append({"title": p.title, "seq": p.seq})
+            continue
+
+        # 合并：按基因组坐标顺序把正链序列连起来
+        start = group[0].ranges[0][0]
+        end = group[-1].ranges[-1][1]
+        name = " + ".join(_piece_label(p) for p in group)
+        if len(name) > 48:
+            name = f"合并({start + 1}..{end})"
+        seq = "".join(parsed.seq[a:b] for p in group for (a, b) in p.ranges)
+        rows.append({"title": f"{name}（正向）", "seq": seq})
+
+    if len(seen) != len(pieces):
+        raise ValueError("分组没有覆盖全部片段，会漏序列。")
+    return rows
+
 
 def convert(body: dict, emit) -> None:
     """把一次上传转成 txt，过程中用 emit() 往回调进度。"""
     username = (body.get("username") or "").strip()
     password = body.get("password") or ""
     filename = body.get("filename") or "input.dna"
-    data_b64 = body.get("data") or ""
 
     if not username or not password:
         raise CredError("请填写 iGEM 账号和密码。")
-    try:
-        raw = base64.b64decode(data_b64, validate=False)
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError("上传的文件读不出来。") from exc
-    if not raw:
-        raise ValueError("上传的文件是空的。")
 
     def log(text: str) -> None:
         emit({"type": "log", "text": text})
@@ -129,19 +205,12 @@ def convert(body: dict, emit) -> None:
         emit({"type": "log", "text": f"查砖号 {index}/{total} …",
               "step": index, "total": total})
 
-    # 先本地解析：不用登录就能知道文件有没有标注
-    fd, tmp_name = tempfile.mkstemp(suffix=".dna")
-    tmp = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "wb") as fh:      # 关掉句柄，否则 Windows 删不掉
-            fh.write(raw)
-        parsed, pieces = engine.plan(tmp, require_features=True, rev_comp=True,
-                                     log=log)
-    finally:
-        tmp.unlink(missing_ok=True)
+    # 先解析：不用登录就能知道文件有没有标注、分了几段
+    parsed, pieces = _decode_dna(body.get("data") or "")
+    rows = _rows_from_groups(parsed, pieces, body.get("groups"))
 
     emit({"type": "log", "text": f"{filename}：{len(parsed.seq)} bp，"
-                                f"{len(pieces)} 段，开始登录 iGEM…"})
+                                f"{len(rows)} 段，开始登录 iGEM…"})
 
     session = None
     profile = None
@@ -152,9 +221,17 @@ def convert(body: dict, emit) -> None:
         finder = engine.BrickFinder(profile_dir=profile, headless=True, verbose=False)
         finder.session = session            # 直接把已登录的会话塞进去
 
-        found = finder.query_many([p.seq for p in pieces], progress=log, on_step=step)
-        engine.apply_bricks(pieces, found, log=log)
-        lines = engine.output_lines(pieces)
+        found = finder.query_many([r["seq"] for r in rows], progress=log, on_step=step)
+
+        lines = []
+        total = len(rows)
+        for i, r in enumerate(rows, 1):
+            brick = found.get(r["seq"])
+            body_text = f"{brick} {r['seq']}" if brick else r["seq"]
+            lines.append(f"{r['title']}：{body_text}")
+            emit({"type": "log",
+                  "text": f"[{i}/{total}] {r['title']} → {brick or '查不到砖号，写序列'}"})
+
         emit({"type": "done", "lines": lines})
     finally:
         if session is not None:
@@ -217,7 +294,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path.split("?")[0] != "/api/convert":
+        path = self.path.split("?")[0]
+        if path not in ("/api/convert", "/api/plan"):
             self._json(404, {"error": "not found"})
             return
 
@@ -227,6 +305,17 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(raw.decode("utf-8") or "{}")
         except Exception:  # noqa: BLE001
             self._json(400, {"error": "请求格式不对"})
+            return
+
+        # /api/plan：只解析，不登录，返回自动分好的段
+        if path == "/api/plan":
+            try:
+                segments = plan_segments(body)
+                self._json(200, {"segments": segments})
+            except Exception as exc:  # noqa: BLE001
+                if VERBOSE:
+                    traceback.print_exc()
+                self._json(200, {"error": f"{type(exc).__name__}: {exc}"})
             return
 
         # 流式返回：一行一个 JSON 事件

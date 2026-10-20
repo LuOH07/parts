@@ -90,6 +90,30 @@
     background:var(--canvas); border:1px solid var(--mist); border-radius:8px;
     outline:none; white-space:pre; overflow:auto;
   }
+  /* 分段列表 */
+  .segwrap{margin-top:12px; border:1px solid var(--mist); border-radius:8px; overflow:hidden}
+  .seghead{display:flex; align-items:center; gap:8px; padding:7px 10px; background:var(--canvas);
+           border-bottom:1px solid var(--mist); font-size:11.5px; color:var(--ink-soft)}
+  .seghead .grow{flex:1}
+  .seghead b{color:var(--ink)}
+  .mini{font-size:11.5px; padding:4px 9px; border-radius:6px; background:var(--blue);
+        color:#fff; border:0; cursor:pointer}
+  .mini:hover:not(:disabled){background:var(--ink)}
+  .mini:disabled{background:var(--mist); color:var(--gray); cursor:not-allowed}
+  .mini.ghost{background:transparent; color:var(--ink-soft); border:1px solid var(--mist)}
+  .mini.ghost:hover{background:var(--canvas); color:var(--ink)}
+  .seglist{max-height:190px; overflow:auto}
+  .segitem{display:flex; align-items:center; gap:7px; padding:5px 10px; font-size:11.5px;
+           border-bottom:1px solid #F0F3F6; cursor:pointer}
+  .segitem:last-child{border-bottom:0}
+  .segitem:hover{background:var(--canvas)}
+  .segitem input{accent-color:var(--blue); margin:0; flex:none}
+  .segnum{color:var(--gray); min-width:20px; text-align:right; flex:none; font-variant-numeric:tabular-nums}
+  .segname{flex:1; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .segname.rev{color:var(--rose)}
+  .segmeta{color:var(--ink-soft); flex:none; font-variant-numeric:tabular-nums}
+  .seghint{padding:6px 10px; font-size:11px; color:var(--ink-soft); background:var(--canvas)}
+
   footer{padding:0 18px 14px; font-size:11.5px; color:var(--ink-soft); text-align:center}
 </style>
 </head>
@@ -111,6 +135,15 @@
     </div>
     <input type="file" id="file" accept=".dna,.snapgene" hidden>
     <div class="fileinfo" id="fileinfo"></div>
+
+    <div class="segwrap" id="segwrap" style="display:none">
+      <div class="seghead">
+        <span class="grow">分段 <b id="segcount"></b>　<small>勾相邻几段可以合并</small></span>
+        <button class="mini" id="mergeBtn" disabled>合并</button>
+        <button class="mini ghost" id="resetBtn">还原</button>
+      </div>
+      <div class="seglist" id="seglist"></div>
+    </div>
 
     <label class="fld" for="user">iGEM 账号</label>
     <input type="text" id="user" autocomplete="username" spellcheck="false">
@@ -204,6 +237,11 @@ document.addEventListener("drop", (e) => {
   if (f) loadFile(f);
 });
 
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
 async function loadFile(file) {
   const buf = await file.arrayBuffer();
   picked = { name: file.name, bytes: new Uint8Array(buf) };
@@ -212,14 +250,104 @@ async function loadFile(file) {
                      (file.size / 1024).toFixed(0) + " KB";
   outEl.value = ""; lines = []; countEl.textContent = "还没有结果";
   dlEl.disabled = true; setProgress(0);
-  setStatus("已选择文件，填上 iGEM 账号密码后点「开始查询」。");
   refreshRunBtn();
+
+  segments = []; segmentsOrig = [];
+  segwrap.style.display = "none";
+  setStatus("正在解析分段…");
+  try {
+    const resp = await fetch(API_BASE + "/api/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: file.name, data: toBase64(picked.bytes) }),
+    });
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    segmentsOrig = (data.segments || []).map(function (s) {
+      return {
+        indices: [s.i], label: s.label, strand: s.strand,
+        start: s.start, end: s.end, length: s.length, kind: s.kind,
+      };
+    });
+    segments = segmentsOrig.slice();
+    renderSegments();
+    segwrap.style.display = "block";
+    setStatus("分好 " + segments.length + " 段。可以勾相邻几段合并，然后填账号密码开始查询。");
+  } catch (err) {
+    setStatus("解析失败：" + (err && err.message ? err.message : err), true);
+  }
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"]/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+/* ---------- 分段列表 / 合并 ---------- */
+
+let segments = [];        // 当前显示的分段（可能已合并）
+let segmentsOrig = [];    // 原始分段，用于「还原」
+
+const segwrap = $("segwrap"), seglistEl = $("seglist"), segcountEl = $("segcount");
+const mergeBtn = $("mergeBtn"), resetBtn = $("resetBtn");
+
+function escapeAttr(s) { return escapeHtml(s); }
+
+function renderSegments() {
+  segcountEl.textContent = segments.length;
+  seglistEl.innerHTML = segments.map(function (s, i) {
+    const rev = s.strand < 0;
+    return '<label class="segitem">' +
+      '<input type="checkbox" class="segchk" data-i="' + i + '">' +
+      '<span class="segnum">' + (i + 1) + '</span>' +
+      '<span class="segname' + (rev ? ' rev' : '') + '" title="' + escapeAttr(s.label) + '">' +
+        escapeHtml(s.label) + (rev ? '（反向）' : '') + '</span>' +
+      '<span class="segmeta">' + s.start + '..' + s.end + ' · ' + s.length + ' bp</span>' +
+      '</label>';
+  }).join("");
+  seglistEl.querySelectorAll(".segchk").forEach(function (c) {
+    c.addEventListener("change", updateMergeBtn);
+  });
+  updateMergeBtn();
 }
+
+function selectedIdx() {
+  return Array.prototype.slice.call(seglistEl.querySelectorAll(".segchk:checked"))
+    .map(function (c) { return parseInt(c.dataset.i, 10); })
+    .sort(function (a, b) { return a - b; });
+}
+
+function updateMergeBtn() {
+  const idx = selectedIdx();
+  const consecutive = idx.length >= 2 && idx[idx.length - 1] - idx[0] === idx.length - 1;
+  mergeBtn.disabled = !consecutive;
+  mergeBtn.textContent = idx.length >= 2
+    ? (consecutive ? "合并 " + idx.length + " 段" : "要选相邻的")
+    : "合并";
+}
+
+mergeBtn.addEventListener("click", function () {
+  const idx = selectedIdx();
+  if (idx.length < 2) return;
+  if (idx[idx.length - 1] - idx[0] !== idx.length - 1) {
+    setStatus("只能合并相邻的几段。", true);
+    return;
+  }
+  const group = idx.map(function (i) { return segments[i]; });
+  const merged = {
+    indices: group.reduce(function (a, s) { return a.concat(s.indices); }, []),
+    label: group.map(function (s) { return s.label; }).join(" + "),
+    strand: 1,
+    start: group[0].start,
+    end: group[group.length - 1].end,
+    length: group.reduce(function (n, s) { return n + s.length; }, 0),
+    kind: "feature",
+  };
+  segments.splice(idx[0], idx.length, merged);
+  renderSegments();
+  setStatus("已合并成 " + segments.length + " 段。");
+});
+
+resetBtn.addEventListener("click", function () {
+  segments = segmentsOrig.slice();
+  renderSegments();
+  setStatus("已还原成 " + segments.length + " 段。");
+});
 
 /* ---------- base64 ---------- */
 function toBase64(bytes) {
@@ -261,6 +389,7 @@ async function run() {
       body: JSON.stringify({
         username: user, password: pass,
         filename: picked.name, data: toBase64(picked.bytes),
+        groups: segments.map(function (s) { return s.indices; }),
       }),
     });
     if (!resp.ok && resp.status !== 200) {
