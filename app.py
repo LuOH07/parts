@@ -47,6 +47,42 @@ VERBOSE = os.environ.get("VERBOSE", "") == "1"
 SIGN_IN = ("https://accounts.igem.org/sign-in?redirect_to="
            "https%3A%2F%2Fregistry.igem.org%2Fparts%2Fblast")
 
+HEADLESS = os.environ.get("HEADLESS", "1") != "0"
+USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+
+
+def _install_stealth_launch() -> None:
+    """让服务端的浏览器别一眼就是机器人：正常的 UA、语言、时区、窗口大小。
+
+    云主机的 headless Chrome 很容易被挡；这里至少把能改的都改成普通 Chrome 的样子。
+    """
+    def _launch_once(self, channel):
+        kwargs = {
+            "user_data_dir": str(self.profile_dir),
+            "headless": self.headless,
+            "args": [
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--window-size=1366,900",
+                "--window-position=40,40",
+                "--disable-blink-features=AutomationControlled",
+                "--lang=en-US",
+            ],
+            "user_agent": USER_AGENT,
+            "locale": "en-US",
+            "timezone_id": "Asia/Shanghai",
+            "viewport": {"width": 1366, "height": 900},
+        }
+        if channel:
+            kwargs["channel"] = channel
+        return self._pw.chromium.launch_persistent_context(**kwargs)
+
+    igem.Session._launch_once = _launch_once       # type: ignore[assignment]
+
+
+_install_stealth_launch()
+
 # 同一个进程里同时跑多个 Playwright 会打架，串起来执行
 _RUN_LOCK = threading.Lock()
 
@@ -125,7 +161,7 @@ def login(username: str, password: str, log=None) -> tuple:
     """用用户自己的 iGEM 账号密码登录，返回一个已登录的 Session。"""
     say = log or (lambda _m: None)
     profile = Path(tempfile.mkdtemp(prefix="igem-web-"))
-    session = igem.Session(headless=True, profile_dir=profile, verbose=False,
+    session = igem.Session(headless=HEADLESS, profile_dir=profile, verbose=False,
                            timeout=240.0)
     session.start()
     try:
@@ -141,6 +177,8 @@ def login(username: str, password: str, log=None) -> tuple:
             except Exception as exc:  # noqa: BLE001
                 raise CredError("找不到登录框，iGEM 登录页可能改版了。") from exc
 
+            say(f"提交账号：{username}（{len(username)} 个字符），"
+                f"密码 {len(password)} 个字符")
             say("填写完成，提交登录…")
             try:
                 page.click("button[type=submit]", timeout=25000)
