@@ -302,7 +302,14 @@ async function run() {
       }
     }
   } catch (err) {
-    setStatus("出错：" + (err && err.message ? err.message : err), true);
+    let msg = err && err.message ? err.message : String(err);
+    if (!API_BASE && /(404|405|Failed to fetch|NetworkError)/i.test(msg)) {
+      msg = "这个页面没有后端，没法登录 iGEM 查 BLAST。\n" +
+            "iGEM 的接口只允许 registry.igem.org 访问，静态页面会被浏览器拦掉。\n" +
+            "请用 `启动网页版.bat` 或 `python app.py` 在本地跑起来（这样页面和后端同源），\n" +
+            "或者把 app.py 部署到 Render 之类的平台，再把 index.html 里的 API_BASE 指向它。";
+    }
+    setStatus("出错：" + msg, true);
     countEl.textContent = "失败";
   } finally {
     clearInterval(tick);
