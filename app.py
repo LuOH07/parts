@@ -204,6 +204,42 @@ def login_with_state(state_bytes: bytes, log=None) -> tuple:
         raise
 
 
+def _sign_in_once(page, identifier: str, password: str) -> tuple:
+    """填一次表单并提交。返回 (ok, alert, status)。"""
+    status: Dict[str, int] = {}
+
+    def _watch(resp):
+        try:
+            if "/auth/sign-in" in resp.url and resp.request.method == "POST":
+                status["code"] = resp.status
+        except Exception:  # noqa: BLE001
+            pass
+
+    page.on("response", _watch)
+    page.goto(SIGN_IN, wait_until="domcontentloaded", timeout=60000)
+    page.wait_for_timeout(900)
+    if "accounts.igem.org" not in page.url:          # 已经有登录态
+        return True, "", status.get("code")
+
+    page.fill("#identifier", identifier, timeout=25000)
+    page.fill("#password", password, timeout=25000)
+    try:
+        page.click("button[type=submit]", timeout=25000)
+    except Exception:  # noqa: BLE001
+        page.press("#password", "Enter")             # 兜底：回车提交
+
+    waited = 0.0
+    while waited < 90.0:
+        if "accounts.igem.org" not in page.url:
+            return True, "", status.get("code")
+        page.wait_for_timeout(500)
+        waited += 0.5
+        alert = _visible_alert(page)
+        if alert:
+            return False, alert, status.get("code")
+    return False, "", status.get("code")
+
+
 def login(username: str, password: str, log=None) -> tuple:
     """用用户自己的 iGEM 账号密码登录，返回一个已登录的 Session。"""
     say = log or (lambda _m: None)
@@ -214,77 +250,64 @@ def login(username: str, password: str, log=None) -> tuple:
     try:
         page = session.page
         say("打开 iGEM 登录页…")
-        page.goto(SIGN_IN, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(900)
+        say("登录接口：POST api.igem.org/v1/auth/sign-in")
 
-        # 记一下登录接口到底回了什么状态码（401/403/429 意思不一样）
-        signin_status: Dict[str, int] = {}
+        # 同一组账号密码，按最可能的顺序试几种写法：
+        # 原始 → 去掉密码尾部空格 → 去掉密码两端空白 → 账号小写
+        tries: list = []
 
-        def _watch(resp):
-            try:
-                if "/auth/sign-in" in resp.url and resp.request.method == "POST":
-                    signin_status["code"] = resp.status
-            except Exception:  # noqa: BLE001
-                pass
+        def add(ident, pwd, note):
+            for a, b, _n in tries:
+                if a == ident and b == pwd:
+                    return
+            tries.append((ident, pwd, note))
 
-        page.on("response", _watch)
-        say(f"登录接口：POST api.igem.org/v1/auth/sign-in")
+        add(username, password, "")
+        if password != password.rstrip():
+            add(username, password.rstrip(), "去掉密码末尾的空格")
+        if password != password.strip():
+            add(username, password.strip(), "去掉密码两端的空白")
+        if username != username.lower():
+            add(username.lower(), password.strip(), "账号转成小写")
 
-        if "accounts.igem.org" in page.url:
-            try:
-                page.fill("#identifier", username, timeout=25000)
-                page.fill("#password", password, timeout=25000)
-            except Exception as exc:  # noqa: BLE001
-                raise CredError("找不到登录框，iGEM 登录页可能改版了。") from exc
+        last = (False, "", None)
+        for ident, pwd, note in tries:
+            if note:
+                say(f"上一次没通过，再试一次：{note}…")
+            say(f"提交账号：{ident}（{len(ident)} 个字符），密码 {len(pwd)} 个字符")
+            last = _sign_in_once(page, ident, pwd)
+            ok, alert, code = last
+            if ok:
+                break
+            if not alert:
+                break                                # 没报错也没跳走，重试没意义
+            say(f"没通过：{alert}" + (f"（HTTP {code}）" if code else ""))
 
-            say(f"提交账号：{username}（{len(username)} 个字符），"
-                f"密码 {len(password)} 个字符")
-            say("填写完成，提交登录…")
-            try:
-                page.click("button[type=submit]", timeout=25000)
-            except Exception:  # noqa: BLE001
-                page.press("#password", "Enter")      # 兜底：回车提交
-
-            # 等它离开登录页；期间盯着页面上的报错
-            deadline = 90.0
-            waited = 0.0
-            alert = ""
-            while waited < deadline:
-                if "accounts.igem.org" not in page.url:
+        ok, alert, code = last
+        if not ok:
+            hint = ""
+            low = (alert or "").lower()
+            for key, text in _ALERT_HINTS.items():
+                if key in low:
+                    hint = "\n" + text
                     break
-                page.wait_for_timeout(500)
-                waited += 0.5
-                if not alert:
-                    alert = _visible_alert(page)
-                    if alert:
-                        code = signin_status.get("code")
-                        hint = ""
-                        low = alert.lower()
-                        for key, text in _ALERT_HINTS.items():
-                            if key in low:
-                                hint = "\n" + text
-                                break
-                        where = f"（登录接口 HTTP {code}）" if code else ""
-                        raise CredError(f"iGEM 登录页提示：{alert}{where}{hint}")
-                if waited == 5.0:
-                    say("还在登录页，等一下…")
+            if alert:
+                where = f"（登录接口 HTTP {code}）" if code else ""
+                raise CredError(f"iGEM 登录页提示：{alert}{where}{hint}")
+            page_hint = _page_hint(page)
+            raise CredError("登录没有成功。"
+                            + (f"（{page_hint}）" if page_hint else "")
+                            + f"\n停留页面：{page.url}")
 
-            if "accounts.igem.org" in page.url:
-                hint = _page_hint(page)
-                raise CredError(
-                    "登录没有成功。" + (f"（{hint}）" if hint else "")
-                    + f"\n停留页面：{page.url}")
-
-            say(f"已跳出登录页：{page.url}")
-
+        say(f"已跳出登录页：{page.url}")
         if "accounts.igem.org" in page.url:
             raise CredError("登录后仍停在 iGEM 账号页，没有回到 registry。")
 
         say("核对登录状态…")
         if not session.is_logged_in():
-            hint = _page_hint(page)
+            page_hint = _page_hint(page)
             raise CredError("登录提交成功但没检测到登录态。"
-                            + (f"（{hint}）" if hint else "")
+                            + (f"（{page_hint}）" if page_hint else "")
                             + f"\n当前页面：{page.url}")
 
         return session, profile          # profile 交给调用方删
