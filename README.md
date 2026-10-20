@@ -70,8 +70,8 @@ Windows 上直接双击 **`启动网页版.bat`**（它会先启动服务，再�
 
 点下面的按钮，用 GitHub 登录一下，剩下的它自己做完：
 
-- **Render** — <https://render.com/deploy?repo=https://github.com/LuOH07/parts>
-- **Railway** — <https://railway.app/new/template?template=https://github.com/LuOH07/parts>
+- **Render**（推荐，带 `render.yaml` 蓝图）— <https://render.com/deploy?repo=https://github.com/LuOH07/parts>
+- **Railway** — 打开 <https://railway.app/new> → Deploy from GitHub repo → 选 `LuOH07/parts`（会自动按 `Dockerfile` 构建）
 
 仓库里已经带好 `Dockerfile`、`render.yaml`、`Procfile`，不用手填 Build / Start 命令。
 部署完成给你的那个网址 **本身就是页面**（页面和后端同源），发给谁都能直接用。
