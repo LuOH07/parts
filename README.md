@@ -66,27 +66,60 @@ Windows 上直接双击 **`启动网页版.bat`**（它会先启动服务，再�
 
 ---
 
-## 部署成公网链接
+## 一键部署（推荐，全程只用浏览器）
 
-`app.py` 是标准 WSGI/HTTP 服务，读环境变量 `PORT`，可以直接丢到任何支持 Python 的平台。
+点下面的按钮，用 GitHub 登录一下，剩下的它自己做完：
 
-**Render（免费档）**
+- **Render** — <https://render.com/deploy?repo=https://github.com/LuOH07/parts>
+- **Railway** — <https://railway.app/new/template?template=https://github.com/LuOH07/parts>
 
-1. 新建 Web Service，连这个仓库
-2. Build Command：`pip install -r requirements.txt && python -m playwright install --with-deps chromium`
-3. Start Command：`python app.py`
-4. 部署完拿到的地址就是页面地址（页面和后端同源）
+仓库里已经带好 `Dockerfile`、`render.yaml`、`Procfile`，不用手填 Build / Start 命令。
+部署完成给你的那个网址 **本身就是页面**（页面和后端同源），发给谁都能直接用。
 
-**Railway / Fly / 自己的服务器** 同理。
+免费档的注意事项：空转会休眠，第一次打开等十几秒；单个请求有平台超时，
+段数很多的质粒建议分几次跑，或者自己升一档。
 
-**只想把页面放 GitHub Pages？**
-那就把 `index.html` 里这一行改成后端地址，页面放在 Pages、后端在别处：
+### 手动部署（任何支持 Python / Docker 的平台）
+
+| 方式 | 命令 |
+| --- | --- |
+| Docker | `docker build -t igem-parts . && docker run -p 8765:8765 igem-parts` |
+| 直接跑 | `pip install -r requirements.txt` + `python -m playwright install --with-deps chromium` + `python app.py` |
+
+服务读环境变量 `PORT`，平台给什么就用什么。
+
+### 只想把页面放 GitHub Pages？
+
+把 `index.html` 里这一行改成后端地址，页面放 Pages、后端放别处：
 
 ```js
 const API_BASE = "https://你的后端地址";
 ```
 
-不填（留空）就表示页面和后端同源。
+留空表示页面和后端同源。
+
+---
+
+## 在浏览器里用（部署完之后）
+
+1. 打开后端给的那个网址
+2. 左边拖入 `.dna`
+3. 填自己的 iGEM 账号密码（可以勾「记住」）
+4. 点「开始查询」，右边实时出进度，跑完点「下载 txt」
+
+不需要在本机装任何东西。
+
+---
+
+## 本机直接跑（只是方便调试，不是必须）
+
+```bash
+pip install -r requirements.txt
+python -m playwright install chromium
+python app.py          # 打开 http://127.0.0.1:8765
+```
+
+Windows 上双击 `启动网页版.bat` 也行。
 
 ---
 
