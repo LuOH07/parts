@@ -157,6 +157,40 @@ def _page_hint(page) -> str:
     return ""
 
 
+def login_with_state(state_bytes: bytes, log=None) -> tuple:
+    """用桌面版导出的 login-state.json（已登录的 cookie）建立会话，不走密码。"""
+    say = log or (lambda _m: None)
+    try:
+        state = json.loads(state_bytes.decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        raise CredError("这个 json 解析不了，确认是桌面版 app 目录里的 "
+                        "login-state.json。") from exc
+    cookies = state.get("cookies") or []
+    if not cookies:
+        raise CredError("这个文件里没有 cookie，不是有效的登录状态。")
+
+    profile = Path(tempfile.mkdtemp(prefix="igem-web-"))
+    session = igem.Session(headless=HEADLESS, profile_dir=profile, verbose=False,
+                           timeout=240.0)
+    session.start()
+    try:
+        say(f"载入登录状态：{len(cookies)} 个 cookie")
+        session.ctx.add_cookies(cookies)
+        session.open_search_page()
+        if not session.is_logged_in():
+            raise CredError("这份登录状态已经过期了，请在桌面版里重新登录一次、"
+                            "再把它导出的 login-state.json 拿来。")
+        say("登录状态有效。")
+        return session, profile
+    except BaseException:
+        try:
+            session.close()
+        except Exception:  # noqa: BLE001
+            pass
+        shutil.rmtree(profile, ignore_errors=True)
+        raise
+
+
 def login(username: str, password: str, log=None) -> tuple:
     """用用户自己的 iGEM 账号密码登录，返回一个已登录的 Session。"""
     say = log or (lambda _m: None)
@@ -327,9 +361,16 @@ def convert(body: dict, emit) -> None:
     username = (body.get("username") or "").strip()
     password = body.get("password") or ""
     filename = body.get("filename") or "input.dna"
+    state_b64 = body.get("state") or ""
 
-    if not username or not password:
-        raise CredError("请填写 iGEM 账号和密码。")
+    # 两种登录方式二选一：账号密码，或者桌面版导出的 login-state.json
+    if not state_b64 and (not username or not password):
+        raise CredError("请填写 iGEM 账号和密码（或者上传 login-state.json）。")
+    if state_b64:
+        try:
+            state_bytes = base64.b64decode(state_b64, validate=False)
+        except Exception as exc:  # noqa: BLE001
+            raise CredError("登录状态文件读不出来。") from exc
 
     def log(text: str) -> None:
         emit({"type": "log", "text": text})
@@ -348,7 +389,10 @@ def convert(body: dict, emit) -> None:
     session = None
     profile = None
     try:
-        session, profile = login(username, password, log=log)   # 登录成功后才拿到 profile
+        if state_b64:
+            session, profile = login_with_state(state_bytes, log=log)
+        else:
+            session, profile = login(username, password, log=log)
         emit({"type": "log", "text": "登录成功，开始查砖号…"})
 
         finder = engine.BrickFinder(profile_dir=profile, headless=True, verbose=False)
