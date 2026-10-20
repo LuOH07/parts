@@ -2,6 +2,14 @@
 
 https://github.com/LuOH07/parts
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/LuOH07/parts)
+
+> 点上面这个按钮 → 用 GitHub 登录 → 确认。仓库里的 `render.yaml` 会自动建好服务
+> （Docker 构建，含 Chromium，健康检查 `/api/health`），几分钟后给你的那个网址就是页面。
+>
+> **GitHub Pages 跑不了这个**：iGEM 的接口只允许 `registry.igem.org` 跨域，
+> 浏览器里没法登录和查询，必须有个后端。GitHub 只能放静态文件，不提供常驻服务器。
+
 把 SnapGene 的 `.dna` 质粒文件转成「一行一段」的 iGEM 砖号清单。
 
 - 左边上传 `.dna`、填自己的 iGEM 账号密码、点「开始查询」
