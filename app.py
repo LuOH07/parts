@@ -59,14 +59,78 @@ class CredError(RuntimeError):
 # 登录
 # --------------------------------------------------------------------------
 
-def login(username: str, password: str) -> tuple:
+_NOT_AN_ERROR = {
+    "username or email", "password", "sign in", "sign-in", "sign up!",
+    "forgot password?", "signin",
+}
+
+# iGEM 英文报错 → 给人看的中文提示
+_ALERT_HINTS = {
+    "invalid credentials":
+        "账号或密码不对。注意：如果这个 iGEM 账号平时是用 Google / 学校邮箱"
+        "一键登录的，需要先在 iGEM 网站上单独设一个密码才能用这里。",
+    "too many":
+        "失败次数太多被暂时限制了，过一会儿再试。",
+}
+
+
+def _visible_alert(page) -> str:
+    """把登录页上真正显示出来的错误提示抠出来。
+
+    iGEM 的登录页把报错放在 [class*="danger"] 里（例如 Invalid credentials），
+    而 [class*="invalid"] 会匹配到输入框外面的包装元素，里面是字段名，
+    所以这里优先 danger，并且把字段名/按钮文字排除掉。
+    """
+    for sel in ('[class*="danger"]', '[role="alert"]',
+                '[class*="error"]', '[class*="Error"]'):
+        try:
+            loc = page.locator(sel)
+            n = loc.count()
+        except Exception:  # noqa: BLE001
+            continue
+        for i in range(min(n, 6)):
+            try:
+                text = (loc.nth(i).inner_text() or "").strip()
+            except Exception:  # noqa: BLE001
+                continue
+            text = " ".join(text.split())
+            if not (2 < len(text) < 300):
+                continue
+            if text.lower() in _NOT_AN_ERROR:
+                continue
+            return text
+    return ""
+
+
+def _page_hint(page) -> str:
+    """猜一下页面现在停在哪一步：验证码 / 两步验证 / 又回到登录框。"""
+    try:
+        if page.locator('iframe[src*="challenge"], iframe[src*="captcha"]').count():
+            return "页面出现了人机验证（CAPTCHA），需要人工过一次"
+        txt = (page.inner_text("body") or "").lower()
+        if "verify you are human" in txt or "captcha" in txt:
+            return "页面出现了人机验证（CAPTCHA）"
+        for sel in ('input[name*="code" i]', 'input[autocomplete="one-time-code"]',
+                    'input[name*="otp" i]', 'input[name*="token" i]'):
+            if page.locator(sel).count():
+                return "这个账号需要两步验证（要输入验证码），程序填不了"
+        if page.locator("#password").count():
+            return "还停在登录框（账号或密码被拒绝）"
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def login(username: str, password: str, log=None) -> tuple:
     """用用户自己的 iGEM 账号密码登录，返回一个已登录的 Session。"""
+    say = log or (lambda _m: None)
     profile = Path(tempfile.mkdtemp(prefix="igem-web-"))
     session = igem.Session(headless=True, profile_dir=profile, verbose=False,
                            timeout=240.0)
     session.start()
     try:
         page = session.page
+        say("打开 iGEM 登录页…")
         page.goto(SIGN_IN, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(900)
 
@@ -74,23 +138,54 @@ def login(username: str, password: str) -> tuple:
             try:
                 page.fill("#identifier", username, timeout=25000)
                 page.fill("#password", password, timeout=25000)
-                page.click("button[type=submit]", timeout=25000)
             except Exception as exc:  # noqa: BLE001
                 raise CredError("找不到登录框，iGEM 登录页可能改版了。") from exc
 
-            deadline = 240.0
+            say("填写完成，提交登录…")
+            try:
+                page.click("button[type=submit]", timeout=25000)
+            except Exception:  # noqa: BLE001
+                page.press("#password", "Enter")      # 兜底：回车提交
+
+            # 等它离开登录页；期间盯着页面上的报错
+            deadline = 90.0
             waited = 0.0
+            alert = ""
             while waited < deadline:
                 if "accounts.igem.org" not in page.url:
                     break
                 page.wait_for_timeout(500)
                 waited += 0.5
-            else:
-                raise CredError("登录没有成功：账号或密码不对，或者这个账号需要额外验证"
-                                "（两步验证 / 未激活）。")
+                if not alert:
+                    alert = _visible_alert(page)
+                    if alert:
+                        hint = ""
+                        low = alert.lower()
+                        for key, text in _ALERT_HINTS.items():
+                            if key in low:
+                                hint = "\n" + text
+                                break
+                        raise CredError(f"iGEM 登录页提示：{alert}{hint}")
+                if waited == 5.0:
+                    say("还在登录页，等一下…")
 
-        if "accounts.igem.org" in page.url or not session.is_logged_in():
-            raise CredError("登录没有成功：账号或密码不对，或者这个账号需要额外验证。")
+            if "accounts.igem.org" in page.url:
+                hint = _page_hint(page)
+                raise CredError(
+                    "登录没有成功。" + (f"（{hint}）" if hint else "")
+                    + f"\n停留页面：{page.url}")
+
+            say(f"已跳出登录页：{page.url}")
+
+        if "accounts.igem.org" in page.url:
+            raise CredError("登录后仍停在 iGEM 账号页，没有回到 registry。")
+
+        say("核对登录状态…")
+        if not session.is_logged_in():
+            hint = _page_hint(page)
+            raise CredError("登录提交成功但没检测到登录态。"
+                            + (f"（{hint}）" if hint else "")
+                            + f"\n当前页面：{page.url}")
 
         return session, profile          # profile 交给调用方删
     except BaseException:
@@ -215,7 +310,7 @@ def convert(body: dict, emit) -> None:
     session = None
     profile = None
     try:
-        session, profile = login(username, password)     # 登录成功后才拿到 profile
+        session, profile = login(username, password, log=log)   # 登录成功后才拿到 profile
         emit({"type": "log", "text": "登录成功，开始查砖号…"})
 
         finder = engine.BrickFinder(profile_dir=profile, headless=True, verbose=False)
