@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>iGEM 砖号查询</title>
+<link rel="icon" href="fish.ico">
+<style>
+  :root{
+    --ink:#465E77; --ink-soft:#7C8B9B; --gray:#C1C8CE; --mist:#E1E7EC;
+    --paper:#FFFFFF; --canvas:#F6F9FB;
+    --violet:#8F8BD9; --violet-xl:#E0E3FB;
+    --blue:#4C8ACA; --blue-xl:#D2E6FB;
+    --teal:#1D9695; --teal-l:#9CDCDD; --teal-xl:#D5F3F4;
+    --rose:#BE5A6A; --rose-xl:#F7E7EA;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    font:14px/1.5 "Microsoft YaHei UI","Segoe UI",system-ui,sans-serif;
+    color:var(--ink); background:var(--canvas);
+    display:flex; flex-direction:column;
+  }
+  header{
+    background:var(--violet); color:#fff; padding:16px 26px;
+    display:flex; align-items:baseline; gap:14px; flex-wrap:wrap;
+  }
+  header h1{margin:0; font-size:19px; font-weight:650; letter-spacing:.3px}
+  header .sub{font-size:12.5px; color:#EDECFB}
+
+  main{
+    flex:1; min-height:0; display:grid;
+    grid-template-columns:400px minmax(0,1fr); gap:18px;
+    padding:18px; max-width:1500px; width:100%; margin:0 auto;
+  }
+  @media (max-width:900px){ main{grid-template-columns:1fr; grid-template-rows:auto minmax(0,1fr)} }
+
+  .panel{
+    background:var(--paper); border:1px solid var(--mist); border-radius:10px;
+    padding:18px; display:flex; flex-direction:column; min-height:0;
+  }
+  .panel h2{
+    margin:0 0 14px; font-size:12px; letter-spacing:1px; text-transform:uppercase;
+    color:var(--ink-soft); font-weight:700;
+  }
+
+  .drop{
+    border:1.5px dashed var(--gray); border-radius:9px; padding:22px 14px;
+    text-align:center; cursor:pointer; transition:.15s; background:var(--canvas);
+  }
+  .drop:hover,.drop.over{border-color:var(--blue); background:var(--blue-xl)}
+  .drop b{display:block; font-size:13.5px; margin-bottom:3px}
+  .drop small{color:var(--ink-soft); font-size:11.5px}
+  .fileinfo{
+    display:none; margin-top:10px; padding:9px 11px; border-radius:8px;
+    background:var(--canvas); border:1px solid var(--mist);
+    font-size:12px; color:var(--ink-soft); word-break:break-all;
+  }
+  .fileinfo b{color:var(--ink)}
+
+  label.fld{display:block; margin-top:14px; font-size:12px; color:var(--ink-soft)}
+  input[type=text],input[type=password]{
+    width:100%; margin-top:5px; padding:9px 11px; font:inherit; color:var(--ink);
+    background:var(--canvas); border:1px solid var(--mist); border-radius:8px; outline:none;
+  }
+  input[type=text]:focus,input[type=password]:focus{border-color:var(--blue); background:#fff}
+  .check{display:flex; align-items:center; gap:7px; margin-top:12px; font-size:12px; color:var(--ink-soft); cursor:pointer}
+  .check input{accent-color:var(--blue); margin:0}
+
+  button{
+    font:inherit; font-weight:600; border:0; border-radius:8px; cursor:pointer;
+    padding:11px 16px; transition:.15s; color:#fff; background:var(--blue);
+  }
+  button:hover:not(:disabled){background:var(--ink)}
+  button:disabled{background:var(--mist); color:var(--gray); cursor:not-allowed}
+  #run{width:100%; margin-top:18px}
+  #dl{background:var(--teal)}
+  #dl:hover:not(:disabled){background:var(--ink)}
+
+  .bar{height:4px; background:var(--mist); border-radius:2px; margin-top:14px; overflow:hidden}
+  .bar i{display:block; height:100%; width:0; background:var(--blue); transition:width .3s}
+  .status{margin-top:9px; font-size:12px; color:var(--ink-soft); min-height:34px; word-break:break-all}
+  .status.err{color:var(--rose)}
+
+  .outbar{display:flex; align-items:center; gap:12px; margin-bottom:10px}
+  .outbar .grow{flex:1; font-size:12px; color:var(--ink-soft)}
+  #out{
+    flex:1; min-height:0; width:100%; resize:none; padding:12px;
+    font:12.5px/1.65 Consolas,ui-monospace,monospace; color:#3F4E5C;
+    background:var(--canvas); border:1px solid var(--mist); border-radius:8px;
+    outline:none; white-space:pre; overflow:auto;
+  }
+  footer{padding:0 18px 14px; font-size:11.5px; color:var(--ink-soft); text-align:center}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>iGEM 砖号查询</h1>
+  <span class="sub">输入 SnapGene .dna　·　一行一段　·　查不到砖号就写序列</span>
+</header>
+
+<main>
+  <!-- 左：输入 / 运行 -->
+  <section class="panel">
+    <h2>输入</h2>
+
+    <div class="drop" id="drop">
+      <b>拖入 .dna 文件</b>
+      <small>或点击选择（SnapGene / SnapGene Viewer 保存的 .dna）</small>
+    </div>
+    <input type="file" id="file" accept=".dna,.snapgene" hidden>
+    <div class="fileinfo" id="fileinfo"></div>
+
+    <label class="fld" for="user">iGEM 账号</label>
+    <input type="text" id="user" autocomplete="username" spellcheck="false">
+
+    <label class="fld" for="pass">密码</label>
+    <input type="password" id="pass" autocomplete="current-password">
+
+    <label class="check"><input type="checkbox" id="remember"> 记住账号和密码（只存在本机浏览器）</label>
+
+    <button id="run" disabled>开始查询</button>
+
+    <div class="bar"><i id="bar"></i></div>
+    <div class="status" id="status">先选一个 .dna 文件。</div>
+  </section>
+
+  <!-- 右：输出 / 下载 -->
+  <section class="panel">
+    <h2>输出</h2>
+    <div class="outbar">
+      <span class="grow" id="count">还没有结果</span>
+      <button id="dl" disabled>下载 txt</button>
+    </div>
+    <textarea id="out" readonly spellcheck="false"></textarea>
+  </section>
+</main>
+
+<footer>密码只用于这一次登录，不会存到服务器上；勾了「记住」只保存在你自己浏览器的本地存储里。</footer>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+
+// 后端地址。页面和后端由同一个服务发出来时留空即可；
+// 如果页面放在 GitHub Pages、后端部署在别处，这里填后端地址，例如
+// const API_BASE = "https://igem-parts.onrender.com";
+const API_BASE = "";
+
+const dropEl = $("drop"), fileEl = $("file"), infoEl = $("fileinfo");
+const userEl = $("user"), passEl = $("pass"), rememberEl = $("remember");
+const runEl = $("run"), barEl = $("bar"), statusEl = $("status");
+const outEl = $("out"), countEl = $("count"), dlEl = $("dl");
+
+let picked = null;        // {name, bytes}
+let lines = [];           // 输出行
+let outputName = "result.txt";
+
+/* ---------- 记住账号 ---------- */
+const KEY = "igem_parts_cred";
+try {
+  const saved = JSON.parse(localStorage.getItem(KEY) || "null");
+  if (saved && saved.user) {
+    userEl.value = saved.user || "";
+    passEl.value = saved.pass || "";
+    rememberEl.checked = true;
+  }
+} catch (e) { /* ignore */ }
+
+function saveCred() {
+  if (rememberEl.checked) {
+    localStorage.setItem(KEY, JSON.stringify({ user: userEl.value, pass: passEl.value }));
+  } else {
+    localStorage.removeItem(KEY);
+  }
+}
+rememberEl.addEventListener("change", saveCred);
+
+/* ---------- 状态 ---------- */
+function setStatus(text, isErr) {
+  statusEl.textContent = text || "";
+  statusEl.classList.toggle("err", !!isErr);
+}
+function setProgress(frac) {
+  barEl.style.width = Math.max(0, Math.min(1, frac)) * 100 + "%";
+}
+function refreshRunBtn() {
+  runEl.disabled = !picked || runEl.dataset.busy === "1";
+}
+
+/* ---------- 选文件 ---------- */
+dropEl.addEventListener("click", () => fileEl.click());
+fileEl.addEventListener("change", () => {
+  if (fileEl.files && fileEl.files[0]) loadFile(fileEl.files[0]);
+});
+["dragenter", "dragover"].forEach((t) =>
+  document.addEventListener(t, (e) => { e.preventDefault(); dropEl.classList.add("over"); }));
+["dragleave", "drop"].forEach((t) =>
+  document.addEventListener(t, (e) => { e.preventDefault(); dropEl.classList.remove("over"); }));
+document.addEventListener("drop", (e) => {
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) loadFile(f);
+});
+
+async function loadFile(file) {
+  const buf = await file.arrayBuffer();
+  picked = { name: file.name, bytes: new Uint8Array(buf) };
+  infoEl.style.display = "block";
+  infoEl.innerHTML = "<b>" + escapeHtml(file.name) + "</b>　" +
+                     (file.size / 1024).toFixed(0) + " KB";
+  outEl.value = ""; lines = []; countEl.textContent = "还没有结果";
+  dlEl.disabled = true; setProgress(0);
+  setStatus("已选择文件，填上 iGEM 账号密码后点「开始查询」。");
+  refreshRunBtn();
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+/* ---------- base64 ---------- */
+function toBase64(bytes) {
+  let bin = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(bin);
+}
+
+/* ---------- 运行 ---------- */
+runEl.addEventListener("click", run);
+
+async function run() {
+  if (!picked) return;
+  const user = userEl.value.trim();
+  const pass = passEl.value;
+  if (!user || !pass) { setStatus("请先填 iGEM 账号和密码。", true); return; }
+
+  saveCred();
+  runEl.dataset.busy = "1";
+  refreshRunBtn();
+  outEl.value = ""; lines = []; dlEl.disabled = true;
+  countEl.textContent = "查询中…";
+  setProgress(0.02);
+  setStatus("正在登录 iGEM 并提交序列，第一次要启动浏览器，耐心等一下…");
+
+  const started = Date.now();
+  const tick = setInterval(() => {
+    const s = Math.round((Date.now() - started) / 1000);
+    setStatus(statusEl.textContent.split("\n")[0] + "\n已用 " + s + " 秒");
+  }, 1000);
+
+  try {
+    const resp = await fetch(API_BASE + "/api/convert", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: user, password: pass,
+        filename: picked.name, data: toBase64(picked.bytes),
+      }),
+    });
+    if (!resp.ok && resp.status !== 200) {
+      const text = await resp.text();
+      throw new Error("服务器返回 " + resp.status + "：" + text.slice(0, 300));
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let total = 0, done = 0;
+
+    while (true) {
+      const { value, done: eof } = await reader.read();
+      if (eof) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n")) >= 0) {
+        const raw = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (!raw) continue;
+        let ev;
+        try { ev = JSON.parse(raw); } catch (e) { continue; }
+        if (ev.type === "log") {
+          if (ev.step && ev.total) { total = ev.total; done = ev.step; }
+          setStatus(ev.text + "\n已用 " + Math.round((Date.now() - started) / 1000) + " 秒");
+          if (total) setProgress(ev.step / Math.max(total, 1));
+        } else if (ev.type === "done") {
+          lines = ev.lines || [];
+          outEl.value = lines.join("\n");
+          outputName = (picked.name.replace(/\.[^.]+$/, "") || "result") + ".txt";
+          countEl.textContent = lines.length + " 行 · " + outputName;
+          dlEl.disabled = lines.length === 0;
+          setProgress(1);
+          setStatus("完成，点右边「下载 txt」。");
+        } else if (ev.type === "error") {
+          throw new Error(ev.message || "未知错误");
+        }
+      }
+    }
+  } catch (err) {
+    setStatus("出错：" + (err && err.message ? err.message : err), true);
+    countEl.textContent = "失败";
+  } finally {
+    clearInterval(tick);
+    runEl.dataset.busy = "0";
+    refreshRunBtn();
+  }
+}
+
+/* ---------- 下载 ---------- */
+dlEl.addEventListener("click", () => {
+  if (!lines.length) return;
+  const blob = new Blob([lines.join("\n") + "\n"], { type: "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = outputName;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+});
+
+refreshRunBtn();
+</script>
+</body>
+</html>

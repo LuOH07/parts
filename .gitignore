@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.igem_profile/
+login-state.json
+python/
+.tmp/
+debug/
